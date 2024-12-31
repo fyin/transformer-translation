@@ -1,0 +1,13 @@
+# Neural Network Model Dependencies
+pytorch
+torchmetrics
+
+# Core Python Libraries
+numpy
+
+# Visualization Tools
+tensorboard
+
+# huggingface datasets
+datasets
+tokenizers
