@@ -127,11 +127,8 @@ def train_model(config):
     elif (device == 'mps'):
         print(f"Device name: <mps>")
     else:
-        print("NOTE: If you have a GPU, consider using it for training.")
-        print(
-            "      On a Windows machine with Nvidia GPU, check this video: https://www.youtube.com/watch?v=GMSjDTU8Zlc")
-        print(
-            "      On a Mac machine, run: pip3 install --pre torch torchvision torchaudio torchtext --index-url https://download.pytorch.org/whl/nightly/cpu")
+        print(f"Device name: <cpu>")
+
     device = torch.device(device)
 
     Path(f"{config['datasource']}_{config['model_folder']}").mkdir(parents=True, exist_ok=True)
