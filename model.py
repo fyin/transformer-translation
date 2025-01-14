@@ -10,8 +10,9 @@ class InputEmbeddings(nn.Module):
    It is commonly used in natural language processing tasks to convert words into numerical representations.
 
    Attributes:
-       d_model (int): The dimensionality of the embedding vectors.
-       vocab_size (int): The size of the vocabulary (number of unique tokens).
+       embedding_dim (int): The dimensionality of the embedding vector for each token.
+       vocab_size (int): The size of the vocabulary (number of unique tokens). Fine tune the value to determine the optimal vocabulary size for the dataset.
+       embedding (nn.Embedding): The embedding layer that transforms input indices into dense vectors.
        embedding (nn.Embedding): The embedding layer that transforms input indices into dense vectors.
 
    Methods:
@@ -19,11 +20,11 @@ class InputEmbeddings(nn.Module):
            Computes the forward pass by applying the embedding layer to the input indices
            and scaling the output by the square root of the embedding dimension.
    """
-    def __init__(self, d_model: int, vocab_size: int):
+    def __init__(self, embedding_dim: int, vocab_size: int):
         super().__init__()
-        self.d_model = d_model
+        self.embedding_dim = embedding_dim
         self.vocab_size = vocab_size
-        self.embedding = nn.Embedding(vocab_size, d_model)
+        self.embedding = nn.Embedding(vocab_size, embedding_dim)
 
     def forward(self, x):
         """
@@ -33,7 +34,7 @@ class InputEmbeddings(nn.Module):
         Returns:
             Tensor: The resulting tensor after applying the embedding layer and scaling.
         """
-        return self.embedding(x) * math.sqrt(self.d_model)
+        return self.embedding(x) * math.sqrt(self.embedding_dim)
 
 
 class PositionalEncoding(nn.Module):
@@ -44,7 +45,7 @@ class PositionalEncoding(nn.Module):
     which is essential for models like Transformers that do not have a built-in notion of order.
 
     Attributes:
-        d_model (int): The dimensionality of the embedding vectors.
+        embedding_dim (int): The dimensionality of the embedding vectors.
         seq_len (int): The length of the input sequences.
         dropout (nn.Dropout): A dropout layer to prevent overfitting.
         pe (Tensor): The precomputed positional encodings for the input sequences.
@@ -54,18 +55,18 @@ class PositionalEncoding(nn.Module):
             Applies the positional encoding to the input tensor and applies dropout.
     """
 
-    def __init__(self, d_model: int, seq_len: int, dropout: float) -> None:
+    def __init__(self, embedding_dim: int, seq_len: int, dropout: float) -> None:
         super().__init__()
-        self.d_model = d_model
+        self.embedding_dim = embedding_dim
         self.seq_len = seq_len
         self.dropout = nn.Dropout(dropout)
 
-        pe = torch.zeros(seq_len, d_model)
+        pe = torch.zeros(seq_len, embedding_dim)
         position = torch.arange(0, seq_len, dtype=torch.float).unsqueeze(1) # (seq_len, 1)
-        div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0)/d_model))  # (d_model / 2)
-        pe[:, 0::2] = torch.sin(position * div_term) # sin(position * (10000 ** (2i / d_model))
-        pe[:, 1::2] = torch.cos(position * div_term) # cos(position * (10000 ** (2i / d_model))
-        pe = pe.unsqueeze(0) # add a new dimension for batch, leading to pe tensor with (1, seq_len, d_model)
+        div_term = torch.exp(torch.arange(0, embedding_dim, 2).float() * (-math.log(10000.0)/embedding_dim))  # (embedding_dim / 2)
+        pe[:, 0::2] = torch.sin(position * div_term) # sin(position * (10000 ** (2i / embedding_dim))
+        pe[:, 1::2] = torch.cos(position * div_term) # cos(position * (10000 ** (2i / embedding_dim))
+        pe = pe.unsqueeze(0) # add a new dimension for batch, leading to pe tensor with (1, seq_len, embedding_dim)
         # Register the positional encoding as a buffer,
         # so that it is not considered a model parameter and will not be updated during backpropagation.
         self.register_buffer('pe', pe)
@@ -73,7 +74,7 @@ class PositionalEncoding(nn.Module):
     def forward(self, x):
         """
         Args:
-            x (Tensor): Input tensor of shape (batch_size, seq_len, d_model).
+            x (Tensor): Input tensor of shape (batch_size, seq_len, embedding_dim).
 
         Returns:
             Tensor: The resulting tensor after adding positional encodings and applying dropout.
@@ -128,11 +129,11 @@ class FeedForwardBlock(nn.Module):
             Applies the feed-forward transformation to the input tensor.
     """
 
-    def __init__(self, d_model: int, d_ff: int, dropout: float) -> None:
+    def __init__(self, embedding_dim: int, d_ff: int, dropout: float) -> None:
         super().__init__()
-        self.linear_1 = nn.Linear(d_model, d_ff)
+        self.linear_1 = nn.Linear(embedding_dim, d_ff)
         self.dropout = nn.Dropout(dropout)
-        self.linear_2 = nn.Linear(d_ff, d_model)
+        self.linear_2 = nn.Linear(d_ff, embedding_dim)
 
     def forward(self, x):
         return self.linear_2(self.dropout(torch.relu_(self.linear_1(x))))
@@ -145,9 +146,9 @@ class MultiHeadAttentionBlock(nn.Module):
     at different positions, which is essential for capturing complex relationships in the input data.
 
     Attributes:
-        d_model (int): The dimensionality of the input and output vectors.
+        embedding_dim (int): The dimensionality of the input and output vectors.
         h (int): The number of attention heads.
-        d_k (int): The dimensionality of each attention head (d_model / h).
+        d_k (int): The dimensionality of each attention head (embedding_dim / h).
         w_q (nn.Linear): Linear transformation for the query.
         w_k (nn.Linear): Linear transformation for the key.
         w_v (nn.Linear): Linear transformation for the value.
@@ -161,18 +162,18 @@ class MultiHeadAttentionBlock(nn.Module):
             Applies the multi-head attention mechanism to the input tensors.
     """
 
-    def __init__(self, d_model: int, h: int, dropout: float) -> None:
+    def __init__(self, embedding_dim: int, h: int, dropout: float) -> None:
         super().__init__()
-        self.d_model = d_model
+        self.embedding_dim = embedding_dim
         self.h = h
-        assert d_model % h == 0, "d_model is not divisible by h"
+        assert embedding_dim % h == 0, "embedding_dim is not divisible by h"
 
-        self.d_k = d_model // h
-        self.w_q = nn.Linear(d_model, d_model)
-        self.w_k = nn.Linear(d_model, d_model)
-        self.w_v = nn.Linear(d_model, d_model)
+        self.d_k = embedding_dim // h
+        self.w_q = nn.Linear(embedding_dim, embedding_dim)
+        self.w_k = nn.Linear(embedding_dim, embedding_dim)
+        self.w_v = nn.Linear(embedding_dim, embedding_dim)
 
-        self.w_o = nn.Linear(d_model, d_model)
+        self.w_o = nn.Linear(embedding_dim, embedding_dim)
         self.dropout = nn.Dropout(dropout)
 
     @staticmethod
@@ -192,7 +193,7 @@ class MultiHeadAttentionBlock(nn.Module):
         return (attention_scores @ value), attention_scores
 
     def forward(self, q, k, v, mask):
-        query = self.w_q(q) # (batch, seq_len, d_model)
+        query = self.w_q(q) # (batch, seq_len, embedding_dim)
         key = self.w_k(k)
         value = self.w_v(v)
 
@@ -203,11 +204,11 @@ class MultiHeadAttentionBlock(nn.Module):
         x, self.attention_scores = MultiHeadAttentionBlock.attention(query, key, value, mask, self.dropout)
 
         # Combine all the heads together
-        # (batch, h, seq_len, d_k) --> (batch, seq_len, h, d_k) --> (batch, seq_len, d_model)
+        # (batch, h, seq_len, d_k) --> (batch, seq_len, h, d_k) --> (batch, seq_len, embedding_dim)
         x = x.transpose(1, 2).contiguous().view(x.shape[0], -1, self.h * self.d_k)
 
         # Hidden layer
-        # (batch, seq_len, d_model) --> (batch, seq_len, d_model)
+        # (batch, seq_len, embedding_dim) --> (batch, seq_len, embedding_dim)
         return self.w_o(x)
 
 
@@ -363,7 +364,7 @@ class ProjectionLayer(nn.Module):
       Projection layer map the final decoder output to the vocabulary size for token prediction.
 
        Attributes:
-           d_model (int): The dimensionality of the embedding vectors.
+           embedding_dim (int): The dimensionality of the embedding vectors.
            vocab_size (int): The size of the vocabulary (number of unique tokens).
 
        Methods:
@@ -371,9 +372,9 @@ class ProjectionLayer(nn.Module):
                Applies linear layer to the input tensor.
       """
 
-    def __init__(self, d_model, vocab_size) -> None:
+    def __init__(self, embedding_dim, vocab_size) -> None:
         super().__init__()
-        self.proj = nn.Linear(d_model, vocab_size)
+        self.proj = nn.Linear(embedding_dim, vocab_size)
 
     def forward(self, x):
         return self.proj(x)
@@ -414,13 +415,13 @@ class Transformer(nn.Module):
         self.projection_layer = projection_layer
 
     def encode(self, src, src_mask):
-        # (batch, seq_len, d_model)
+        # (batch, seq_len, embedding_dim)
         src = self.src_embed(src)
         src = self.src_pos(src)
         return self.encoder(src, src_mask)
 
     def decode(self, encoder_output: torch.Tensor, src_mask: torch.Tensor, tgt: torch.Tensor, tgt_mask: torch.Tensor):
-        # (batch, seq_len, d_model)
+        # (batch, seq_len, embedding_dim)
         tgt = self.tgt_embed(tgt)
         tgt = self.tgt_pos(tgt)
         return self.decoder(tgt, encoder_output, src_mask, tgt_mask)
@@ -429,46 +430,46 @@ class Transformer(nn.Module):
         # (batch, seq_len, vocab_size)
         return self.projection_layer(x)
 
-def build_transformer(src_vocab_size: int, tgt_vocab_size: int, src_seq_len: int, tgt_seq_len: int, d_model: int=512, N: int=6, h: int=8, dropout: float=0.1, d_ff: int=2048) -> Transformer:
+def build_transformer(src_vocab_size: int, tgt_vocab_size: int, src_seq_len: int, tgt_seq_len: int, embedding_dim: int=512, N: int=6, h: int=8, dropout: float=0.1, d_ff: int=2048) -> Transformer:
     """
     Create a transformer model instance and initialize its weights and biases using Xavier uniform initialization,
     which is  a weight initialization method that helps with training stability by keeping the scale of gradients roughly the same in all layers.
     """
 
     # Create the embedding layers
-    src_embed = InputEmbeddings(d_model, src_vocab_size)
-    tgt_embed = InputEmbeddings(d_model, tgt_vocab_size)
+    src_embed = InputEmbeddings(embedding_dim, src_vocab_size)
+    tgt_embed = InputEmbeddings(embedding_dim, tgt_vocab_size)
 
     # Create the positional encoding layers
-    src_pos = PositionalEncoding(d_model, src_seq_len, dropout)
-    tgt_pos = PositionalEncoding(d_model, tgt_seq_len, dropout)
+    src_pos = PositionalEncoding(embedding_dim, src_seq_len, dropout)
+    tgt_pos = PositionalEncoding(embedding_dim, tgt_seq_len, dropout)
 
     # Create the encoder blocks
     # N: #number of encoder blocks in the model,
     # Increasing N increases the model's capacity and depth, but it also increases computational cost
     encoder_blocks = []
     for _ in range(N):
-        encoder_self_attention_block = MultiHeadAttentionBlock(d_model, h, dropout)
-        feed_forward_block = FeedForwardBlock(d_model, d_ff, dropout)
-        encoder_block = EncoderBlock(d_model, encoder_self_attention_block, feed_forward_block, dropout)
+        encoder_self_attention_block = MultiHeadAttentionBlock(embedding_dim, h, dropout)
+        feed_forward_block = FeedForwardBlock(embedding_dim, d_ff, dropout)
+        encoder_block = EncoderBlock(embedding_dim, encoder_self_attention_block, feed_forward_block, dropout)
         encoder_blocks.append(encoder_block)
 
     # Create the decoder blocks
     decoder_blocks = []
     for _ in range(N):
-        decoder_self_attention_block = MultiHeadAttentionBlock(d_model, h, dropout)
-        decoder_cross_attention_block = MultiHeadAttentionBlock(d_model, h, dropout)
-        feed_forward_block = FeedForwardBlock(d_model, d_ff, dropout)
-        decoder_block = DecoderBlock(d_model, decoder_self_attention_block, decoder_cross_attention_block,
+        decoder_self_attention_block = MultiHeadAttentionBlock(embedding_dim, h, dropout)
+        decoder_cross_attention_block = MultiHeadAttentionBlock(embedding_dim, h, dropout)
+        feed_forward_block = FeedForwardBlock(embedding_dim, d_ff, dropout)
+        decoder_block = DecoderBlock(embedding_dim, decoder_self_attention_block, decoder_cross_attention_block,
                                      feed_forward_block, dropout)
         decoder_blocks.append(decoder_block)
 
     # Create the encoder and decoder
-    encoder = Encoder(d_model, nn.ModuleList(encoder_blocks))
-    decoder = Decoder(d_model, nn.ModuleList(decoder_blocks))
+    encoder = Encoder(embedding_dim, nn.ModuleList(encoder_blocks))
+    decoder = Decoder(embedding_dim, nn.ModuleList(decoder_blocks))
 
     # Create the projection layer
-    projection_layer = ProjectionLayer(d_model, tgt_vocab_size)
+    projection_layer = ProjectionLayer(embedding_dim, tgt_vocab_size)
 
     # Create the transformer
     transformer = Transformer(encoder, decoder, src_embed, tgt_embed, src_pos, tgt_pos, projection_layer)
