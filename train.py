@@ -59,8 +59,10 @@ def greedy_decode(model, source, source_mask, tokenizer_tgt, max_len, device):
 def get_or_build_tokenizer(config, ds, lang):
     tokenizer_path = Path(config['tokenizer_file'].format(lang))
     if not Path.exists(tokenizer_path):
+        # refer to https://huggingface.co/docs/tokenizers/quicktour
         tokenizer = Tokenizer(WordLevel(unk_token = "[UNK]"))
         tokenizer.pre_tokenizer = Whitespace()
+        # Words appearing less than twice will be ignored
         trainer = WordLevelTrainer(special_tokens=["[UNK]", "[PAD]", "[SOS]", "[EOS]"], min_frequency = 2)
         tokenizer.train_from_iterator(get_all_sentences(ds, lang), trainer=trainer)
         tokenizer.save(str(tokenizer_path))
@@ -109,7 +111,7 @@ def get_ds(config):
     return train_dataloader, val_dataloader, tokenizer_src, tokenizer_tgt
 
 def get_model(config, vocab_src_len, vocab_tgt_len):
-    model = build_transformer(vocab_src_len, vocab_tgt_len, config['seq_len'], config['seq_len'], d_model=config['d_model'])
+    model = build_transformer(vocab_src_len, vocab_tgt_len, config['seq_len'], config['seq_len'], embedding_dim=config['embedding_dim'])
     return model
 
 def train_model(config):
@@ -132,12 +134,19 @@ def train_model(config):
             "      On a Windows machine with Nvidia GPU, check this video: https://www.youtube.com/watch?v=GMSjDTU8Zlc")
         print(
             "      On a Mac machine, run: pip3 install --pre torch torchvision torchaudio torchtext --index-url https://download.pytorch.org/whl/nightly/cpu")
+
     device = torch.device(device)
 
     Path(f"{config['datasource']}_{config['model_folder']}").mkdir(parents=True, exist_ok=True)
 
     train_dataloader, val_dataloader, tokenizer_src, tokenizer_tgt = get_ds(config)
+    # Call model.to(device) before initializing the optimizer to ensure that the optimizer tracks the correct parameters in memory.
     model = get_model(config, tokenizer_src.get_vocab_size(), tokenizer_tgt.get_vocab_size()).to(device)
+
+    # Check if multiple GPUs are available
+    if torch.cuda.device_count() > 1:
+        print(f"Using {torch.cuda.device_count()} GPUs!")
+        model = nn.DataParallel(model)
 
     #  log data for visualization in TensorBoard.
     writer = SummaryWriter(config['experiment_name'])
@@ -149,7 +158,7 @@ def train_model(config):
     preload = config['preload']
     model_filename = latest_weights_file_path(config) if preload == 'latest' else get_weights_file_path(config, preload) if preload else None
     if model_filename:
-        print(f"Preloading model {model_filename}")
+        print(f"Preloading model from {model_filename}")
         state = torch.load(model_filename)
         model.load_state_dict(state['model_state_dict'])
         initial_epoch = state['epoch'] + 1
@@ -171,8 +180,8 @@ def train_model(config):
             encoder_mask = batch['encoder_mask'].to(device) #(b, 1, 1, seq_len)
             decoder_mask = batch['decoder_mask'].to(device) #(b, 1, seq_len, seq_len) ??? Todo why??
 
-            encoder_output = model.encode(encoder_input, encoder_mask) # (b, seq_len, d_model)
-            decoder_output = model.decode(encoder_output, encoder_mask, decoder_input, decoder_mask) #(b, seq_len, d_model)
+            encoder_output = model.encode(encoder_input, encoder_mask) # (b, seq_len, embedding_dim)
+            decoder_output = model.decode(encoder_output, encoder_mask, decoder_input, decoder_mask) #(b, seq_len, embedding_dim)
             proj_output = model.project(decoder_output) #(b, seq_len, vocab_size)
 
             label = batch['label'].to(device) #(b, seq_len)
@@ -190,6 +199,7 @@ def train_model(config):
 
             # Update the weights
             optimizer.step()
+            # Reset the gradient to none, otherwise the gradients on the weights will be accumulated.
             optimizer.zero_grad(set_to_none=True)
 
             global_step += 1
@@ -198,6 +208,7 @@ def train_model(config):
         run_validation(model, val_dataloader, tokenizer_src, tokenizer_tgt, config['seq_len'], device, lambda msg: batch_iterator.write(msg), global_step, writer)
 
         model_filename = get_weights_file_path(config, f"{epoch:02d}")
+        print(f"Saving epoch model state to {model_filename}!")
         torch.save({
             'epoch': epoch,
             'model_state_dict': model.state_dict(),
